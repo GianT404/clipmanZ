@@ -1,0 +1,9 @@
+<schemalist>
+  <schema id="org.gnome.shell.extensions.clipboardhistory" path="/org/gnome/shell/extensions/clipboardhistory/">
+    <key name="toggle-shortcut" type="as">
+      <default>['&lt;Super&gt;period']</default>
+      <summary>Toggle clipboard history</summary>
+      <description>Keyboard shortcut for opening clipboard history.</description>
+    </key>
+  </schema>
+</schemalist>
