@@ -1,20 +1,15 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
-import GdkPixbuf from 'gi://GdkPixbuf?version=2.0';
 import Meta from 'gi://Meta';
 import St from 'gi://St';
+import {ClipboardImageStore, MAX_IMAGE_BYTES} from './imageStore.js';
 
 const MAX_ENTRIES = 50;
 const MAX_ENTRY_BYTES = 64 * 1024;
 const MAX_HISTORY_BYTES = 1024 * 1024;
-const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_METADATA_BYTES = 16 * 1024;
 const MAX_IMAGE_HISTORY_BYTES = 64 * 1024 * 1024;
 const MAX_IMAGE_ENTRIES = 20;
-const THUMBNAIL_WIDTH = 112;
-const THUMBNAIL_HEIGHT = 84;
-const SELECTED_IMAGE_WIDTH = 880;
-const SELECTED_IMAGE_HEIGHT = 660;
 const CAPTURE_DEBOUNCE_MS = 60;
 const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg'];
 
@@ -29,13 +24,8 @@ export class ClipboardHistory {
         this._enabled = true;
         this._readCancellable = null;
         this._imageWritePending = false;
-        this._imageWriteCancellable = null;
         this._metadataCancellables = new Set();
-        this._saveCancellables = new Set();
-        this._thumbnailCancellable = new Gio.Cancellable();
-        this._selectedImageCancellable = null;
-        this._cacheDir = null;
-        this._prepareImageCache();
+        this._imageStore = new ClipboardImageStore();
         this._selection = global.display.get_selection();
         this._selectionSignal = this._selection.connect('owner-changed', (_selection, selectionType) => {
             if (selectionType === Meta.SelectionType.SELECTION_CLIPBOARD) {
@@ -63,16 +53,10 @@ export class ClipboardHistory {
         this._selection.disconnect(this._selectionSignal);
         this._selection = null;
         this._readCancellable?.cancel();
-        this._imageWriteCancellable?.cancel();
         for (const cancellable of this._metadataCancellables)
             cancellable.cancel();
         this._metadataCancellables.clear();
-        for (const cancellable of this._saveCancellables)
-            cancellable.cancel();
-        this._saveCancellables.clear();
-        this._thumbnailCancellable.cancel();
-        this.cancelSelectedImagePreview();
-        this._clearImageCache();
+        this._imageStore.destroy(this._entries);
         this._entries = [];
         this.onChanged = null;
     }
@@ -99,67 +83,9 @@ export class ClipboardHistory {
     }
 
     saveImage(entry, callback) {
-        if (!this._enabled || entry.type !== 'image' || !this._entries.includes(entry))
+        if (!this._enabled || !this._entries.includes(entry))
             return false;
-
-        const picturesPath = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES);
-        const directoryPath = picturesPath || GLib.get_home_dir();
-        try {
-            const result = GLib.mkdir_with_parents(directoryPath, 0o755);
-            if (result !== 0)
-                throw new Error(`Unable to access save directory (errno ${result})`);
-
-            const extension = entry.mimeType === 'image/jpeg' ? 'jpg' : 'png';
-            const rawName = entry.label || `Clipboard image ${new Date(entry.time).toISOString().replace(/[:.]/g, '-')}`;
-            const baseName = rawName
-                .replace(/\.(?:png|jpe?g)$/i, '')
-                .replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, ' ')
-                .replace(/\s+/g, ' ')
-                .trim()
-                .slice(0, 120) || 'Clipboard image';
-            let destination;
-            for (let suffix = 1; suffix <= 1000; suffix++) {
-                const name = suffix === 1
-                    ? `${baseName}.${extension}`
-                    : `${baseName} (${suffix}).${extension}`;
-                const candidate = Gio.File.new_for_path(GLib.build_filenamev([directoryPath, name]));
-                if (!candidate.query_exists(null)) {
-                    destination = candidate;
-                    break;
-                }
-            }
-            if (!destination)
-                throw new Error('Unable to find an available image filename');
-
-            const source = Gio.File.new_for_path(entry.path);
-            const cancellable = new Gio.Cancellable();
-            this._saveCancellables.add(cancellable);
-            source.copy_async(
-                destination,
-                Gio.FileCopyFlags.NONE,
-                GLib.PRIORITY_DEFAULT,
-                cancellable,
-                null,
-                (file, result) => {
-                    let savedPath = null;
-                    let error = null;
-                    try {
-                        file.copy_finish(result);
-                        savedPath = destination.get_path();
-                    } catch (copyError) {
-                        if (!cancellable.is_cancelled())
-                            error = copyError;
-                    } finally {
-                        this._saveCancellables.delete(cancellable);
-                    }
-                    callback?.(savedPath, error);
-                },
-            );
-            return true;
-        } catch (error) {
-            callback?.(null, error);
-            return false;
-        }
+        return this._imageStore.save(entry, callback);
     }
 
     remove(entry) {
@@ -167,7 +93,7 @@ export class ClipboardHistory {
         if (index < 0)
             return false;
         this._entries.splice(index, 1);
-        this._deleteImageFile(entry);
+        this._imageStore.delete(entry);
         this.onChanged?.();
         return true;
     }
@@ -182,95 +108,11 @@ export class ClipboardHistory {
             this._captureSourceId = 0;
         }
         this._readCancellable?.cancel();
-        this._imageWriteCancellable?.cancel();
+        this._imageStore.cancelPendingWrites();
         for (const entry of this._entries)
-            this._deleteImageFile(entry);
+            this._imageStore.delete(entry);
         this._entries = [];
         this.onChanged?.();
-    }
-
-    _prepareImageCache() {
-        const rootPath = GLib.build_filenamev([GLib.get_user_cache_dir(), 'clipboard-history@clipmanz']);
-        try {
-            const result = GLib.mkdir_with_parents(rootPath, 0o700);
-            if (result !== 0)
-                throw new Error(`mkdir failed with errno ${result}`);
-            const modeResult = GLib.chmod(rootPath, 0o700);
-            if (modeResult !== 0)
-                throw new Error(`chmod failed with errno ${modeResult}`);
-            const root = Gio.File.new_for_path(rootPath);
-            const pid = GLib.file_read_link('/proc/self');
-            if (!/^\d+$/.test(pid))
-                throw new Error('Unable to determine this Shell process ID');
-            this._pruneStaleCacheSessions(root, pid);
-            this._cacheDir = root.get_child(`session-${pid}`);
-            const sessionResult = GLib.mkdir_with_parents(this._cacheDir.get_path(), 0o700);
-            if (sessionResult !== 0)
-                throw new Error(`session cache mkdir failed with errno ${sessionResult}`);
-            const sessionModeResult = GLib.chmod(this._cacheDir.get_path(), 0o700);
-            if (sessionModeResult !== 0)
-                throw new Error(`session cache chmod failed with errno ${sessionModeResult}`);
-            this._clearImageCache();
-        } catch (error) {
-            this._cacheDir = null;
-            logError(error, 'Unable to prepare private clipboard image cache');
-        }
-    }
-
-    _pruneStaleCacheSessions(root, currentPid) {
-        let children;
-        try {
-            children = root.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
-            let info;
-            while ((info = children.next_file(null))) {
-                const match = info.get_name().match(/^session-(\d+)$/);
-                if (!match || match[1] === currentPid || Gio.File.new_for_path(`/proc/${match[1]}`).query_exists(null))
-                    continue;
-                const staleDir = root.get_child(info.get_name());
-                this._clearDirectory(staleDir);
-                staleDir.delete(null);
-            }
-            children.close(null);
-        } catch (error) {
-            logError(error, 'Unable to prune stale clipboard image cache sessions');
-        }
-    }
-
-    _clearImageCache() {
-        this._clearDirectory(this._cacheDir);
-    }
-
-    _clearDirectory(directory) {
-        if (!directory)
-            return;
-        let children;
-        try {
-            children = directory.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
-            let info;
-            while ((info = children.next_file(null))) {
-                try {
-                    directory.get_child(info.get_name()).delete(null);
-                } catch (error) {
-                    logError(error, 'Unable to remove stale clipboard image cache file');
-                }
-            }
-            children.close(null);
-        } catch (error) {
-            logError(error, 'Unable to clean clipboard image cache');
-        }
-    }
-
-    _deleteImageFile(entry) {
-        if (entry.type !== 'image' || !entry.path)
-            return;
-        const file = Gio.File.new_for_path(entry.path);
-        if (!file.query_exists(null))
-            return;
-        try {
-            file.delete(null);
-        } catch (error) {
-            logError(error, 'Unable to remove clipboard image cache file');
-        }
     }
 
     _queueCapture() {
@@ -402,84 +244,44 @@ export class ClipboardHistory {
                 return;
         }
         const size = bytes.get_size();
-        if (size === 0 || size > MAX_IMAGE_BYTES || !this._cacheDir)
+        if (size === 0 || size > MAX_IMAGE_BYTES)
             return;
         const previous = this._entries[0];
         if (previous?.type === 'image' && previous.fingerprint === fingerprint)
             return;
 
-        const extension = mimeType === 'image/png' ? 'png' : 'jpg';
-        const file = this._cacheDir.get_child(`image-${GLib.uuid_string_random()}.${extension}`);
-        const entry = {
-            type: 'image', mimeType, path: file.get_path(), size, fingerprint,
-            metadataMime, thumbnail: null, time: Date.now(),
-        };
-        const cancellable = new Gio.Cancellable();
         this._imageWritePending = true;
-        this._imageWriteCancellable = cancellable;
-        try {
-            file.replace_contents_bytes_async(
-                bytes,
-                null,
-                false,
-                Gio.FileCreateFlags.PRIVATE,
-                cancellable,
-                (_file, result) => {
-                    let saved = false;
-                    try {
-                        [saved] = file.replace_contents_finish(result);
-                    } catch (error) {
-                        if (!cancellable.is_cancelled())
-                            logError(error, 'Unable to save clipboard image to cache');
-                    }
-
-                    this._imageWritePending = false;
-                    if (this._imageWriteCancellable === cancellable)
-                        this._imageWriteCancellable = null;
-                    if (!saved || !this._enabled || generation !== this._captureGeneration) {
-                        this._deleteImageFile(entry);
-                        this._finishCapture();
-                        return;
-                    }
-
-                    this._entries.unshift(entry);
-                    this._trim();
-                    if (this._entries.includes(entry)) {
-                        this.onChanged?.();
-                        this._readImageInfo(entry);
-                        this._decodeThumbnail(entry);
-                        this._readImageMetadata(entry, generation);
-                    }
-                    this._finishCapture();
-                },
-            );
-        } catch (error) {
+        this._imageStore.writeImage(mimeType, metadataMime, bytes, fingerprint, (entry, error) => {
             this._imageWritePending = false;
-            this._imageWriteCancellable = null;
-            logError(error, 'Unable to start clipboard image cache write');
-            this._deleteImageFile(entry);
-        }
-    }
-
-    _decodeThumbnail(entry) {
-        this._decodeImageFile(entry, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, this._thumbnailCancellable, preview => {
-            entry.thumbnail = preview;
-            this.onChanged?.();
-        }, 'clipboard image thumbnail');
-    }
-
-    _readImageInfo(entry) {
-        GdkPixbuf.Pixbuf.get_file_info_async(entry.path, null, (_source, result) => {
-            try {
-                const [, width, height] = GdkPixbuf.Pixbuf.get_file_info_finish(result);
-                if (!this._enabled || !this._entries.includes(entry) || width <= 0 || height <= 0)
-                    return;
-                entry.width = width;
-                entry.height = height;
-                this.onChanged?.();
-            } catch {
-                // Some image variants may not expose dimensions through GdkPixbuf.
+            if (error && this._enabled && generation === this._captureGeneration)
+                logError(error, 'Unable to save clipboard image to cache');
+            if (!entry || !this._enabled || generation !== this._captureGeneration) {
+                if (entry)
+                    this._imageStore.delete(entry);
+                this._finishCapture();
+                return;
             }
+
+            this._entries.unshift(entry);
+            this._trim();
+            if (this._entries.includes(entry)) {
+                this.onChanged?.();
+                this._imageStore.readDimensions(entry, (width, height) => {
+                    if (!this._entries.includes(entry))
+                        return;
+                    entry.width = width;
+                    entry.height = height;
+                    this.onChanged?.();
+                });
+                this._imageStore.decodeThumbnail(entry, preview => {
+                    if (!this._enabled || !this._entries.includes(entry))
+                        return;
+                    entry.thumbnail = preview;
+                    this.onChanged?.();
+                });
+                this._readImageMetadata(entry, generation);
+            }
+            this._finishCapture();
         });
     }
 
@@ -577,76 +379,13 @@ export class ClipboardHistory {
         return null;
     }
 
-    loadSelectedImagePreview(entry, callback, onError = null, width = SELECTED_IMAGE_WIDTH, height = SELECTED_IMAGE_HEIGHT) {
-        this.cancelSelectedImagePreview();
-        if (!this._enabled || !this._entries.includes(entry))
-            return;
-        const cancellable = new Gio.Cancellable();
-        this._selectedImageCancellable = cancellable;
-        this._decodeImageFile(entry, width, height, cancellable, preview => {
-            if (this._selectedImageCancellable !== cancellable)
-                return;
-            this._selectedImageCancellable = null;
-            callback(preview);
-        }, 'selected clipboard image', () => {
-            if (this._selectedImageCancellable === cancellable)
-                this._selectedImageCancellable = null;
-            onError?.();
-        });
+    loadSelectedImagePreview(entry, callback, onError = null, width, height) {
+        if (this._enabled && this._entries.includes(entry))
+            this._imageStore.loadPreview(entry, callback, onError, width, height);
     }
 
     cancelSelectedImagePreview() {
-        this._selectedImageCancellable?.cancel();
-        this._selectedImageCancellable = null;
-    }
-
-    _decodeImageFile(entry, width, height, cancellable, onReady, context, onError = null) {
-        const file = Gio.File.new_for_path(entry.path);
-        try {
-            file.read_async(GLib.PRIORITY_DEFAULT, cancellable, (source, result) => {
-                let stream;
-                try {
-                    stream = source.read_finish(result);
-                    GdkPixbuf.Pixbuf.new_from_stream_at_scale_async(
-                        stream,
-                        width,
-                        height,
-                        true,
-                        cancellable,
-                        (_source, decodeResult) => {
-                            try {
-                                const pixbuf = GdkPixbuf.Pixbuf.new_from_stream_finish(decodeResult);
-                                if (this._enabled && !cancellable.is_cancelled() && this._entries.includes(entry))
-                                    onReady(pixbuf);
-                            } catch (error) {
-                                if (!cancellable.is_cancelled()) {
-                                    logError(error, `Unable to decode ${context}`);
-                                    onError?.();
-                                }
-                            } finally {
-                                try {
-                                    stream.close(null);
-                                } catch (error) {
-                                    logError(error, `Unable to close ${context} stream`);
-                                }
-                            }
-                        },
-                    );
-                } catch (error) {
-                    if (!cancellable.is_cancelled()) {
-                        logError(error, `Unable to read ${context}`);
-                        onError?.();
-                    }
-                    stream?.close(null);
-                }
-            }
-            );
-        } catch (error) {
-            if (!cancellable.is_cancelled()) {
-                logError(error, `Unable to start reading ${context}`);
-                onError?.();
-            }
-        }
+        this._imageStore.cancelPreview();
     }
 
     _trim() {
@@ -673,7 +412,7 @@ export class ClipboardHistory {
         }
         for (const entry of this._entries) {
             if (entry.type === 'image' && !kept.includes(entry))
-                this._deleteImageFile(entry);
+                this._imageStore.delete(entry);
         }
         this._entries = kept;
     }

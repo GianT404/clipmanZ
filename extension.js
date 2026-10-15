@@ -95,7 +95,7 @@ export default class ClipboardHistoryExtension extends Extension {
     _injectPaste() {
         try {
             if (!this._virtualKeyboard) {
-                const seat = Clutter.get_default_backend().get_default_seat();
+                const seat = global.stage.context.get_backend().get_default_seat();
                 this._virtualKeyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
             }
             if (!this._virtualKeyboard)

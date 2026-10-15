@@ -4,81 +4,8 @@ import Pango from 'gi://Pango';
 import St from 'gi://St';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-
-const FILTERS = [
-    {id: 'all', label: 'All'},
-    {id: 'text', label: 'Text'},
-    {id: 'link', label: 'Links'},
-    {id: 'code', label: 'Code'},
-    {id: 'color', label: 'Colors'},
-    {id: 'image', label: 'Images'},
-];
-const TYPE_LABELS = {text: 'Text', link: 'Link', code: 'Code', color: 'Color', image: 'Image', secret: 'Secret'};
-const TYPE_ICONS = {
-    text: 'text-x-generic-symbolic',
-    link: 'web-browser-symbolic',
-    code: 'utilities-terminal-symbolic',
-    image: 'image-x-generic-symbolic',
-    secret: 'changes-prevent-symbolic',
-};
-
-const API_KEY_LABEL = /\b(?:api[_-]?key|api[_-]?token|access[_-]?token|secret[_-]?key|client[_-]?secret|auth[_-]?token)\b\s*[:=]/i;
-const API_KEY_VALUE = /\b(?:sk-(?:live|test)-|sk-|rk_(?:live|test)_|AIza|AKIA|xox[baprs]-|api[._-]?)[A-Za-z0-9_-]{13,}/i;
-const API_KEY_VALUES = /\b(?:sk-(?:live|test)-|sk-|rk_(?:live|test)_|AIza|AKIA|xox[baprs]-|api[._-]?)[A-Za-z0-9_-]{13,}/gi;
-
-function hasApiKey(text) {
-    return API_KEY_LABEL.test(text) || API_KEY_VALUE.test(text.trim());
-}
-
-function maskApiKeys(text) {
-    const labeled = text.replace(
-        /(\b(?:api[_-]?key|api[_-]?token|access[_-]?token|secret[_-]?key|client[_-]?secret|auth[_-]?token)\b\s*[:=]\s*["']?)([A-Za-z0-9._~+\/-]{13,})(["']?)/gi,
-        (_match, prefix, key, suffix) => `${prefix}${key.slice(0, 6)}***${key.slice(-6)}${suffix}`,
-    );
-    return labeled.replace(API_KEY_VALUES, key => `${key.slice(0, 6)}***${key.slice(-6)}`);
-}
-
-function classifyEntry(item) {
-    if (item.type === 'image')
-        return 'image';
-
-    const text = item.text.trim();
-    if (hasApiKey(text))
-        return 'code';
-    if (/\bgh[pousr]_[A-Za-z0-9]{20,}\b/.test(text))
-        return 'secret';
-    if (/^(?:#[\da-f]{3}|#[\da-f]{4}|#[\da-f]{6}|#[\da-f]{8}|(?:rgb|rgba|hsl|hsla)\([\d.%\s,+-]+\))$/i.test(text))
-        return 'color';
-    if (/^(?:(?:https?|ftp):\/\/|www\.)\S+$/i.test(text) || /^(?:[\da-z-]+\.)+[a-z]{2,}(?:\/\S*)?$/i.test(text))
-        return 'link';
-    if (/\b(?:const|let|var|function|class|import|export|return|def|async|await)\b|=>|[{};]|^\$\s|^(?:git|npm|yarn|pnpm|docker|kubectl|cargo|make)\s/m.test(text))
-        return 'code';
-    return 'text';
-}
-
-function formatAge(timestamp) {
-    const minutes = Math.floor(Math.max(0, Date.now() - timestamp) / 60000);
-    if (minutes < 1)
-        return 'Just now';
-    if (minutes < 60)
-        return `${minutes}m ago`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24)
-        return `${hours}h ago`;
-    const days = Math.floor(hours / 24);
-    return `${days}d ago`;
-}
-
-function getPreviewText(item) {
-    if (item.type === 'image') {
-        return item.label || (item.mimeType === 'image/jpeg' ? 'JPEG image' : 'PNG image');
-    }
-    const maskedApiText = maskApiKeys(item.text);
-    const token = maskedApiText.match(/\bgh[pousr]_[A-Za-z0-9]{20,}\b/);
-    if (token)
-        return maskedApiText.replace(token[0], `${token[0].slice(0, 5)}••••••••••••`);
-    return maskedApiText.replace(/[\r\n\t]+/g, ' ').trim();
-}
+import {FILTERS, TYPE_ICONS, TYPE_LABELS, classifyEntry, formatAge, getPreviewText} from './historyEntry.js';
+import {PopupImageViewer} from './popupImageViewer.js';
 
 function createImageDragActor(item) {
     const actor = new St.Widget({
@@ -94,7 +21,7 @@ function createImageDragActor(item) {
         const imageContent = St.ImageContent.new_with_preferred_size(72, 72);
         const pixbuf = item.thumbnail;
         const loaded = imageContent.set_data(
-            Clutter.get_default_backend().get_cogl_context(),
+            global.stage.context.get_backend().get_cogl_context(),
             pixbuf.get_pixels(),
             pixbuf.get_has_alpha() ? Cogl.PixelFormat.RGBA_8888 : Cogl.PixelFormat.RGB_888,
             pixbuf.get_width(),
@@ -121,6 +48,12 @@ export class HistoryPopup {
         this._onClose = onClose;
         this._onPaste = onPaste;
         this._initialState = initialState;
+        this._imageViewer = new PopupImageViewer(history, () => {
+            if (this._overlay) {
+                this._updateImagePreview();
+                this._entry.grab_key_focus();
+            }
+        });
         this._historyChangedCallback = () => {
             if (this._overlay)
                 this._render();
@@ -152,7 +85,7 @@ export class HistoryPopup {
             width: global.stage.width,
             height: global.stage.height,
         });
-        this._panel = new St.BoxLayout({style_class: 'clipboard-panel', vertical: true, reactive: true});
+        this._panel = new St.BoxLayout({style_class: 'clipboard-panel', orientation: Clutter.Orientation.VERTICAL, reactive: true});
         this._overlay.add_child(this._panel);
         this._build();
         Main.uiGroup.add_child(this._overlay);
@@ -180,7 +113,7 @@ export class HistoryPopup {
         if (!this._overlay)
             return;
         const targetWindow = restoreWindow ? this._previousWindow : null;
-        this._closeFullscreen(false);
+        this._imageViewer.destroy();
         this._history.cancelSelectedImagePreview();
         this._entry.clutter_text.disconnect(this._keySignal);
         this._entry.clutter_text.disconnect(this._focusInSignal);
@@ -213,7 +146,7 @@ export class HistoryPopup {
     }
 
     _build() {
-        const topbar = new St.BoxLayout({style_class: 'clipboard-topbar', vertical: true, x_expand: true});
+        const topbar = new St.BoxLayout({style_class: 'clipboard-topbar', orientation: Clutter.Orientation.VERTICAL, x_expand: true});
         const searchRow = new St.BoxLayout({style_class: 'clipboard-search-row', x_expand: true});
         const search = new St.BoxLayout({style_class: 'clipboard-search', x_expand: true});
         search.add_child(new St.Icon({
@@ -265,41 +198,10 @@ export class HistoryPopup {
         this._body = new St.BoxLayout({style_class: 'clipboard-body', x_expand: true, y_expand: true});
         this._scroll = new St.ScrollView({style_class: 'clipboard-scroll', overlay_scrollbars: true, enable_mouse_scrolling: true, x_expand: true, y_expand: true});
         this._scroll.set_policy(St.PolicyType.NEVER, St.PolicyType.NEVER);
-        this._list = new St.BoxLayout({vertical: true, style_class: 'clipboard-list'});
+        this._list = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, style_class: 'clipboard-list'});
         this._scroll.set_child(this._list);
         this._body.add_child(this._scroll);
-        this._imagePreview = new St.Bin({
-            style_class: 'clipboard-image-viewer',
-            x_expand: false,
-            y_expand: true,
-            visible: false,
-        });
-        this._imagePreviewContent = new St.BoxLayout({
-            vertical: true,
-            style_class: 'clipboard-image-viewer-content',
-            x_expand: true,
-            y_expand: true,
-        });
-        this._imageCanvas = new St.Bin({
-            style_class: 'clipboard-image-canvas',
-            x_expand: true,
-            y_expand: true,
-        });
-        this._imageTitle = new St.Label({
-            style_class: 'clipboard-image-title',
-            x_expand: true,
-            y_align: Clutter.ActorAlign.CENTER,
-        });
-        this._imageDetails = new St.Label({
-            style_class: 'clipboard-image-details',
-            x_expand: true,
-            y_align: Clutter.ActorAlign.CENTER,
-        });
-        this._imagePreviewContent.add_child(this._imageCanvas);
-        this._imagePreviewContent.add_child(this._imageTitle);
-        this._imagePreviewContent.add_child(this._imageDetails);
-        this._imagePreview.set_child(this._imagePreviewContent);
-        this._body.add_child(this._imagePreview);
+        this._body.add_child(this._imageViewer.actor);
         this._panel.add_child(this._body);
 
         this._empty = new St.Label({
@@ -333,92 +235,7 @@ export class HistoryPopup {
     }
 
     _updateImagePreview() {
-        const item = this._filtered[this._selected];
-        if (item?.type !== 'image') {
-            this._history.cancelSelectedImagePreview();
-            this._previewEntry = null;
-            this._previewLoading = false;
-            this._imagePreview.visible = false;
-            this._imageCanvas.set_child(null);
-            return;
-        }
-
-        this._imagePreview.visible = true;
-        this._imageTitle.set_text(item.label || (item.mimeType === 'image/jpeg' ? 'JPEG image' : 'PNG image'));
-        this._imageDetails.set_text(this._getImageDetails(item));
-        if (this._previewEntry === item)
-            return;
-
-        this._previewEntry = item;
-        this._previewLoading = true;
-        this._imageCanvas.set_child(new St.Label({
-            text: 'Loading image…',
-            style_class: 'clipboard-image-loading',
-            x_align: Clutter.ActorAlign.CENTER,
-            y_align: Clutter.ActorAlign.CENTER,
-        }));
-        this._history.loadSelectedImagePreview(item, preview => {
-            if (!this._overlay || this._filtered[this._selected] !== item)
-                return;
-            this._showSelectedImage(preview);
-        }, () => {
-            if (!this._overlay || this._filtered[this._selected] !== item)
-                return;
-            this._previewLoading = false;
-            this._imageCanvas.set_child(new St.Label({
-                text: 'Image preview unavailable',
-                style_class: 'clipboard-image-loading',
-                x_align: Clutter.ActorAlign.CENTER,
-                y_align: Clutter.ActorAlign.CENTER,
-            }));
-        });
-    }
-
-    _showSelectedImage(preview) {
-        try {
-            const item = this._filtered[this._selected];
-            const imageContent = St.ImageContent.new_with_preferred_size(
-                preview.get_width(), preview.get_height());
-            const loaded = imageContent.set_data(
-                Clutter.get_default_backend().get_cogl_context(),
-                preview.get_pixels(),
-                preview.get_has_alpha() ? Cogl.PixelFormat.RGBA_8888 : Cogl.PixelFormat.RGB_888,
-                preview.get_width(),
-                preview.get_height(),
-                preview.get_rowstride(),
-            );
-            if (!loaded)
-                throw new Error('St.ImageContent rejected the clipboard preview');
-
-            const image = new St.Widget({
-                style_class: 'clipboard-image-full',
-                x_expand: true,
-                y_expand: true,
-                content_gravity: Clutter.ContentGravity.RESIZE_ASPECT,
-            });
-            image.set_content(imageContent);
-            this._imageCanvas.set_child(image);
-            this._imageDetails.set_text(this._getImageDetails(item));
-            this._previewLoading = false;
-        } catch (error) {
-            logError(error, 'Unable to display selected clipboard image');
-            this._previewLoading = false;
-            this._imageCanvas.set_child(new St.Label({
-                text: 'Image preview unavailable',
-                style_class: 'clipboard-image-loading',
-                x_align: Clutter.ActorAlign.CENTER,
-                y_align: Clutter.ActorAlign.CENTER,
-            }));
-        }
-    }
-
-    _getImageDetails(item) {
-        const format = item.mimeType === 'image/jpeg' ? 'JPEG' : 'PNG';
-        const dimensions = item.width && item.height ? `${item.width} × ${item.height}` : 'Image';
-        const size = item.size >= 1024 * 1024
-            ? `${(item.size / (1024 * 1024)).toFixed(1)} MB`
-            : `${Math.max(1, Math.round(item.size / 1024))} KB`;
-        return `${format} · ${dimensions} · ${size}`;
+        this._imageViewer.update(this._filtered[this._selected]);
     }
 
     _position() {
@@ -434,7 +251,7 @@ export class HistoryPopup {
         this._panel.set_position(Math.round(x), Math.round(y));
         this._panel.set_size(width, height);
         const bodyWidth = Math.max(1, width - 18 - 9 - 4);
-        this._imagePreview.set_width(Math.round(bodyWidth * 2 / 3));
+        this._imageViewer.setWidth(Math.round(bodyWidth * 2 / 3));
         this._overlay.set_position(monitor.x, monitor.y);
         this._overlay.set_size(monitor.width, monitor.height);
     }
@@ -508,16 +325,8 @@ export class HistoryPopup {
     }
 
     _onCapturedEvent(event) {
-        if (this._fullscreenActor) {
-            if (event.type() === Clutter.EventType.KEY_PRESS) {
-                const symbol = event.get_key_symbol();
-                if (symbol === Clutter.KEY_Escape || symbol === Clutter.KEY_space)
-                    this._closeFullscreen();
-            } else if (event.type() === Clutter.EventType.BUTTON_PRESS) {
-                this._closeFullscreen();
-            }
+        if (this._imageViewer.handleCapturedEvent(event))
             return Clutter.EVENT_STOP;
-        }
         if (event.type() === Clutter.EventType.KEY_PRESS) {
             const symbol = event.get_key_symbol();
             if (symbol === Clutter.KEY_Escape) {
@@ -525,7 +334,7 @@ export class HistoryPopup {
                 return Clutter.EVENT_STOP;
             }
             if (symbol === Clutter.KEY_space && this._filtered[this._selected]?.type === 'image') {
-                this._openFullscreen(this._filtered[this._selected]);
+                this._imageViewer.openFullscreen(this._filtered[this._selected], this._monitor);
                 return Clutter.EVENT_STOP;
             }
             if (isTabKeyEvent(event)) {
@@ -575,88 +384,6 @@ export class HistoryPopup {
             if (path)
                 Main.notify('Clipboard History', `Image saved to ${path}`);
         });
-    }
-
-    _openFullscreen(item) {
-        const monitor = this._monitor;
-        if (!monitor || item?.type !== 'image' || this._fullscreenActor)
-            return;
-
-        this._fullscreenLoading = new St.Label({
-            text: 'Loading image…',
-            style_class: 'clipboard-image-loading',
-            x_align: Clutter.ActorAlign.CENTER,
-            y_align: Clutter.ActorAlign.CENTER,
-        });
-        this._fullscreenActor = new St.Bin({
-            style_class: 'clipboard-image-fullscreen',
-            reactive: true,
-            can_focus: true,
-            child: this._fullscreenLoading,
-        });
-        this._fullscreenKeySignal = this._fullscreenActor.connect('key-press-event', (_actor, event) => {
-            const symbol = event.get_key_symbol();
-            if (symbol === Clutter.KEY_Escape || symbol === Clutter.KEY_space)
-                this._closeFullscreen();
-            return Clutter.EVENT_STOP;
-        });
-        this._fullscreenActor.set_position(monitor.x, monitor.y);
-        this._fullscreenActor.set_size(monitor.width, monitor.height);
-        Main.uiGroup.add_child(this._fullscreenActor);
-        this._fullscreenActor.grab_key_focus();
-        this._panel.hide();
-
-        this._history.loadSelectedImagePreview(item, preview => {
-            if (!this._overlay || !this._fullscreenActor || this._filtered[this._selected] !== item)
-                return;
-            try {
-                const imageContent = St.ImageContent.new_with_preferred_size(
-                    preview.get_width(), preview.get_height());
-                const loaded = imageContent.set_data(
-                    Clutter.get_default_backend().get_cogl_context(),
-                    preview.get_pixels(),
-                    preview.get_has_alpha() ? Cogl.PixelFormat.RGBA_8888 : Cogl.PixelFormat.RGB_888,
-                    preview.get_width(),
-                    preview.get_height(),
-                    preview.get_rowstride(),
-                );
-                if (!loaded)
-                    throw new Error('St.ImageContent rejected the full-screen image');
-                const image = new St.Widget({
-                    style_class: 'clipboard-image-fullscreen-content',
-                    x_expand: true,
-                    y_expand: true,
-                    content_gravity: Clutter.ContentGravity.RESIZE_ASPECT,
-                });
-                image.set_content(imageContent);
-                this._fullscreenActor.set_child(image);
-            } catch (error) {
-                logError(error, 'Unable to display full-screen clipboard image');
-                this._closeFullscreen();
-            }
-        }, () => {
-            if (this._fullscreenActor) {
-                Main.notify('Clipboard History', 'Unable to open image');
-                this._closeFullscreen();
-            }
-        }, monitor.width, monitor.height);
-    }
-
-    _closeFullscreen(refreshPreview = true) {
-        if (!this._fullscreenActor)
-            return;
-        this._history.cancelSelectedImagePreview();
-        this._fullscreenActor.disconnect(this._fullscreenKeySignal);
-        this._fullscreenKeySignal = 0;
-        this._fullscreenActor.destroy();
-        this._fullscreenActor = null;
-        this._fullscreenLoading = null;
-        if (this._panel)
-            this._panel.show();
-        if (this._entry)
-            this._entry.grab_key_focus();
-        if (refreshPreview && this._overlay)
-            this._updateImagePreview();
     }
 
     _isInsidePanel([x, y]) {
@@ -743,7 +470,7 @@ export class HistoryPopup {
                         imageContent.set_preferred_height(35);
                         const hasAlpha = item.thumbnail.get_has_alpha();
                         const loaded = imageContent.set_data(
-                            Clutter.get_default_backend().get_cogl_context(),
+                            global.stage.context.get_backend().get_cogl_context(),
                             item.thumbnail.get_pixels(),
                             hasAlpha ? Cogl.PixelFormat.RGBA_8888 : Cogl.PixelFormat.RGB_888,
                             item.thumbnail.get_width(),
@@ -777,7 +504,7 @@ export class HistoryPopup {
                 }
             }
 
-            const details = new St.BoxLayout({vertical: true, style_class: 'clipboard-row-details', x_expand: true});
+            const details = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, style_class: 'clipboard-row-details', x_expand: true});
             const preview = getPreviewText(item);
             const label = new St.Label({text: preview, style_class: 'clipboard-preview', x_expand: true, y_align: Clutter.ActorAlign.CENTER});
             if (kind === 'code' || kind === 'color' || kind === 'secret')
