@@ -2,6 +2,7 @@ import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import {getCoglContext} from './shellCompat.js';
 
 export class PopupImageViewer {
     constructor(history, restoreFocus) {
@@ -164,7 +165,7 @@ export class PopupImageViewer {
             const imageContent = St.ImageContent.new_with_preferred_size(
                 preview.get_width(), preview.get_height());
             const loaded = imageContent.set_data(
-                container.get_context().get_backend().get_cogl_context(),
+                getCoglContext(),
                 preview.get_pixels(),
                 preview.get_has_alpha() ? Cogl.PixelFormat.RGBA_8888 : Cogl.PixelFormat.RGB_888,
                 preview.get_width(),

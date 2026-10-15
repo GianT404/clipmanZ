@@ -22,7 +22,8 @@ fi
 mkdir -p "$DEST/schemas"
 cp "$ROOT/metadata.json" "$ROOT/extension.js" "$ROOT/prefs.js" \
   "$ROOT/clipboardHistory.js" "$ROOT/imageStore.js" "$ROOT/popup.js" \
-  "$ROOT/historyEntry.js" "$ROOT/popupImageViewer.js" "$ROOT/stylesheet.css" "$DEST/"
+  "$ROOT/historyEntry.js" "$ROOT/popupImageViewer.js" "$ROOT/shellCompat.js" \
+  "$ROOT/stylesheet.css" "$DEST/"
 cp "$ROOT/schemas/${SCHEMA}.gschema.xml" "$DEST/schemas/"
 glib-compile-schemas --strict "$DEST/schemas"
 printf 'Installed %s to %s\n' "$UUID" "$DEST"

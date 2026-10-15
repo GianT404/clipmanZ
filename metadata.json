@@ -2,7 +2,7 @@
   "uuid": "clipboard-history@clipmanz",
   "name": "Clipboard History",
   "description": "A lightweight local text and image clipboard history.",
-  "shell-version": ["50", "51"],
+  "shell-version": ["46", "47", "48", "49", "50", "51"],
   "settings-schema": "org.gnome.shell.extensions.clipboardhistory",
-  "version": 2
+  "version": 3
 }

@@ -6,6 +6,7 @@ import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {FILTERS, TYPE_ICONS, TYPE_LABELS, classifyEntry, formatAge, getPreviewText} from './historyEntry.js';
 import {PopupImageViewer} from './popupImageViewer.js';
+import {getCoglContext} from './shellCompat.js';
 
 function createImageDragActor(item) {
     const actor = new St.Widget({
@@ -21,7 +22,7 @@ function createImageDragActor(item) {
         const imageContent = St.ImageContent.new_with_preferred_size(72, 72);
         const pixbuf = item.thumbnail;
         const loaded = imageContent.set_data(
-            global.stage.context.get_backend().get_cogl_context(),
+            getCoglContext(),
             pixbuf.get_pixels(),
             pixbuf.get_has_alpha() ? Cogl.PixelFormat.RGBA_8888 : Cogl.PixelFormat.RGB_888,
             pixbuf.get_width(),
@@ -470,7 +471,7 @@ export class HistoryPopup {
                         imageContent.set_preferred_height(35);
                         const hasAlpha = item.thumbnail.get_has_alpha();
                         const loaded = imageContent.set_data(
-                            global.stage.context.get_backend().get_cogl_context(),
+                            getCoglContext(),
                             item.thumbnail.get_pixels(),
                             hasAlpha ? Cogl.PixelFormat.RGBA_8888 : Cogl.PixelFormat.RGB_888,
                             item.thumbnail.get_width(),

@@ -6,6 +6,7 @@ import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import {ClipboardHistory} from './clipboardHistory.js';
 import {HistoryPopup} from './popup.js';
+import {getClutterBackend} from './shellCompat.js';
 
 const SCHEMA_ID = 'org.gnome.shell.extensions.clipboardhistory';
 const KEYBINDING = 'toggle-shortcut';
@@ -95,7 +96,7 @@ export default class ClipboardHistoryExtension extends Extension {
     _injectPaste() {
         try {
             if (!this._virtualKeyboard) {
-                const seat = global.stage.context.get_backend().get_default_seat();
+                const seat = getClutterBackend().get_default_seat();
                 this._virtualKeyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
             }
             if (!this._virtualKeyboard)
