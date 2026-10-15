@@ -572,12 +572,19 @@ export class HistoryPopup {
         this._fullscreenActor = new St.Bin({
             style_class: 'clipboard-image-fullscreen',
             reactive: true,
-            can_focus: false,
+            can_focus: true,
             child: this._fullscreenLoading,
+        });
+        this._fullscreenKeySignal = this._fullscreenActor.connect('key-press-event', (_actor, event) => {
+            const symbol = event.get_key_symbol();
+            if (symbol === Clutter.KEY_Escape || symbol === Clutter.KEY_space)
+                this._closeFullscreen();
+            return Clutter.EVENT_STOP;
         });
         this._fullscreenActor.set_position(monitor.x, monitor.y);
         this._fullscreenActor.set_size(monitor.width, monitor.height);
         Main.uiGroup.add_child(this._fullscreenActor);
+        this._fullscreenActor.grab_key_focus();
         this._panel.hide();
 
         this._history.loadSelectedImagePreview(item, preview => {
@@ -620,11 +627,15 @@ export class HistoryPopup {
         if (!this._fullscreenActor)
             return;
         this._history.cancelSelectedImagePreview();
+        this._fullscreenActor.disconnect(this._fullscreenKeySignal);
+        this._fullscreenKeySignal = 0;
         this._fullscreenActor.destroy();
         this._fullscreenActor = null;
         this._fullscreenLoading = null;
         if (this._panel)
             this._panel.show();
+        if (this._entry)
+            this._entry.grab_key_focus();
         if (refreshPreview && this._overlay)
             this._updateImagePreview();
     }
