@@ -19,7 +19,7 @@ Just copy as usual, and Clipmanz automatically saves your text and images to cli
 | `Esc` | Close popup |
 
 
-
+---
 <p align="center">
   Made by <b>ミＧＩＡＮ4０４シ</b>
 </p>
