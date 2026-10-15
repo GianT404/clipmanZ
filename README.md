@@ -1,37 +1,28 @@
 # Clipboard History
 
-A clipboard history extension for GNOME Shell 50. Text is limited to 64 KiB per entry and 1 MiB total; PNG/JPEG images are limited to 4 MiB each and 8 MiB total. Nothing from clipboard history is written to disk. History is cleared when the extension is disabled or GNOME Shell exits.
-
-<p align="center">
-  <img src="https://img.shields.io/badge/Gnome-Shell-404040?logo=gnome&logoColor=white" />
-</p>
-
-## How to use
-
-Just copy as usual, and Clipmanz automatically saves your text and images to clipboard history :P.
+A GNOME Shell clipboard history extension for text, links, code, colors, and images. Text history stays in memory; image data uses a temporary local cache. Nothing is uploaded and there is no telemetry.
 
 ## Features
 
-- Automatically captures copied text and PNG/JPEG images.
-- Search and filter clipboard history by content type.
-- Paste an entry with the keyboard or a mouse click.
-- Preview images, open them full-screen, or save them to Pictures.
+- Search and filter clipboard history.
+- Paste entries with Enter, a mouse click, or Alt+1-9.
+- Preview images, view them full-screen, save them, and drag them to apps.
 - Customize the popup shortcut in Extension Preferences.
-- Keeps clipboard data local; no network access or telemetry.
 
-### Key Bindings
+## Install
+
+After publication, install **Clipboard History** from [extensions.gnome.org](https://extensions.gnome.org/) using the GNOME Extensions app or a compatible extension manager.
+
+For maintainers: run `./pack.sh` to create `build/clipboard-history@clipmanz.shell-extension.zip`, then upload that archive at [extensions.gnome.org/upload](https://extensions.gnome.org/upload/). The local `install.sh` is only a development helper and is not part of the published extension bundle.
+
+## Key Bindings
 
 | Key | Action |
 |-----|--------|
+| Configured shortcut | Toggle popup |
 | `Enter` | Paste selected entry |
-| `Tab` / `shift+tab` |  Switch between history filters |
-| `Alt + 1-9` | Paste entry from history |
-| `delete` / `shift + delete` | Delete selected entry / Clear clipboard history |
-| `Space` | enlarge the image to full screen |
-| `Esc` | Close popup |
-
-
----
-<p align="center">
-  Made by <b>ミＧＩＡＮ4０４シ</b>
-</p>
+| `Alt + 1-9` | Paste a numbered entry |
+| `Tab` / `Shift + Tab` | Switch history filters |
+| `Space` | Open selected image full-screen |
+| `Delete` / `Shift + Delete` | Delete selected entry / clear history |
+| `Escape` | Close popup or image view |

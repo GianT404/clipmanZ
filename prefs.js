@@ -5,7 +5,6 @@ import Gtk from 'gi://Gtk';
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 const SHORTCUT_KEY = 'toggle-shortcut';
-const DEFAULT_SHORTCUT = '<Super>period';
 
 function shortcutLabel(settings) {
     const [accelerator] = settings.get_strv(SHORTCUT_KEY);
@@ -30,9 +29,8 @@ export default class ClipboardHistoryPreferences extends ExtensionPreferences {
             hexpand: false,
         });
         const resetButton = new Gtk.Button({
-            label: 'Reset',
+            label: 'Clear',
             valign: Gtk.Align.CENTER,
-            tooltip_text: 'Restore Super + .',
         });
 
         let capturing = false;
@@ -48,7 +46,7 @@ export default class ClipboardHistoryPreferences extends ExtensionPreferences {
         const cancelCapture = () => {
             if (!capturing)
                 return;
-            settings.set_strv(SHORTCUT_KEY, previousShortcut ?? [DEFAULT_SHORTCUT]);
+            settings.set_strv(SHORTCUT_KEY, previousShortcut ?? []);
             previousShortcut = null;
             setCapturing(false);
         };
@@ -61,7 +59,7 @@ export default class ClipboardHistoryPreferences extends ExtensionPreferences {
         });
         resetButton.connect('clicked', () => {
             previousShortcut = null;
-            settings.set_strv(SHORTCUT_KEY, [DEFAULT_SHORTCUT]);
+            settings.set_strv(SHORTCUT_KEY, []);
             setCapturing(false);
         });
         const settingsChangedId = settings.connect(`changed::${SHORTCUT_KEY}`, updateLabel);

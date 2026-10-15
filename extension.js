@@ -61,11 +61,13 @@ export default class ClipboardHistoryExtension extends Extension {
     }
 
     _cancelPaste() {
-        for (const property of ['_pasteSourceId', '_injectSourceId']) {
-            if (this[property]) {
-                GLib.source_remove(this[property]);
-                this[property] = 0;
-            }
+        if (this._pasteSourceId) {
+            GLib.source_remove(this._pasteSourceId);
+            this._pasteSourceId = 0;
+        }
+        if (this._injectSourceId) {
+            GLib.source_remove(this._injectSourceId);
+            this._injectSourceId = 0;
         }
     }
 

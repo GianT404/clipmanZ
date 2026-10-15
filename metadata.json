@@ -1,8 +1,8 @@
 {
   "uuid": "clipboard-history@clipmanz",
   "name": "Clipboard History",
-  "description": "A lightweight local text and image clipboard history.",
+  "description": "Captures clipboard text and images into a local history. Clipboard data stays on your device; images use a temporary local cache.",
+  "url": "https://github.com/GianT404/clipmanZ",
   "shell-version": ["46", "47", "48", "49", "50", "51"],
-  "settings-schema": "org.gnome.shell.extensions.clipboardhistory",
-  "version": 3
+  "settings-schema": "org.gnome.shell.extensions.clipboardhistory"
 }

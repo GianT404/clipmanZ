@@ -18,6 +18,8 @@ export class ClipboardHistory {
         this._clipboard = St.Clipboard.get_default();
         this._entries = [];
         this._restoreEcho = null;
+        this._restoreCancellable = null;
+        this._restoreEntry = null;
         this._captureGeneration = 0;
         this._reading = false;
         this._capturePending = false;
@@ -52,6 +54,7 @@ export class ClipboardHistory {
         }
         this._selection.disconnect(this._selectionSignal);
         this._selection = null;
+        this._cancelRestore();
         this._readCancellable?.cancel();
         for (const cancellable of this._metadataCancellables)
             cancellable.cancel();
@@ -61,25 +64,64 @@ export class ClipboardHistory {
         this.onChanged = null;
     }
 
-    restore(entry) {
-        let echo = entry;
+    restore(entry, callback = null) {
+        this._cancelRestore();
         try {
             if (entry.type === 'image') {
-                echo = {type: 'image', fingerprint: entry.fingerprint};
-                this._restoreEcho = echo;
-                const [bytes] = Gio.File.new_for_path(entry.path).load_bytes(null);
-                this._clipboard.set_content(St.ClipboardType.CLIPBOARD, entry.mimeType, bytes);
+                const echo = {type: 'image', fingerprint: entry.fingerprint};
+                const file = Gio.File.new_for_path(entry.path);
+                const cancellable = new Gio.Cancellable();
+                this._restoreCancellable = cancellable;
+                this._restoreEntry = entry;
+                file.load_bytes_async(cancellable, (_file, result) => {
+                    let bytes;
+                    try {
+                        [bytes] = file.load_bytes_finish(result);
+                    } catch (error) {
+                        if (this._restoreCancellable !== cancellable)
+                            return;
+                        this._restoreCancellable = null;
+                        this._restoreEntry = null;
+                        logError(error, 'Unable to read clipboard image from cache');
+                        callback?.(false);
+                        return;
+                    }
+
+                    if (!this._enabled || this._restoreCancellable !== cancellable)
+                        return;
+                    this._restoreCancellable = null;
+                    this._restoreEntry = null;
+                    try {
+                        this._restoreEcho = echo;
+                        this._clipboard.set_content(St.ClipboardType.CLIPBOARD, entry.mimeType, bytes);
+                    } catch (error) {
+                        if (this._restoreEcho === echo)
+                            this._restoreEcho = null;
+                        logError(error, 'Unable to restore clipboard image');
+                        callback?.(false);
+                        return;
+                    }
+                    callback?.(true);
+                });
+                return true;
             } else {
                 this._restoreEcho = entry;
                 this._clipboard.set_text(St.ClipboardType.CLIPBOARD, entry.text);
             }
-            return true;
         } catch (error) {
-            if (this._restoreEcho === echo)
-                this._restoreEcho = null;
+            this._restoreEcho = null;
             logError(error, 'Unable to restore clipboard content');
+            callback?.(false);
             return false;
         }
+        callback?.(true);
+        return true;
+    }
+
+    _cancelRestore() {
+        this._restoreCancellable?.cancel();
+        this._restoreCancellable = null;
+        this._restoreEntry = null;
     }
 
     saveImage(entry, callback) {
@@ -92,6 +134,8 @@ export class ClipboardHistory {
         const index = this._entries.indexOf(entry);
         if (index < 0)
             return false;
+        if (this._restoreEntry === entry)
+            this._cancelRestore();
         this._entries.splice(index, 1);
         this._imageStore.delete(entry);
         this.onChanged?.();
@@ -102,6 +146,7 @@ export class ClipboardHistory {
         if (this._entries.length === 0 && !this._imageWritePending)
             return;
         this._captureGeneration++;
+        this._cancelRestore();
         this._capturePending = false;
         if (this._captureSourceId) {
             GLib.source_remove(this._captureSourceId);

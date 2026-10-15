@@ -91,7 +91,13 @@ export class HistoryPopup {
         this._build();
         Main.uiGroup.add_child(this._overlay);
         this._position();
+        this._entry.clutter_text.set_activatable(true);
         this._keySignal = this._entry.clutter_text.connect('key-press-event', (_text, event) => this._onKey(event));
+        this._activateSignal = this._entry.clutter_text.connect('activate', () => {
+            const item = this._filtered[this._selected];
+            if (item)
+                this._choose(item, true);
+        });
         this._focusInSignal = this._entry.clutter_text.connect('key-focus-in', () => this._entry.clutter_text.set_cursor_visible(true));
         this._focusOutSignal = this._entry.clutter_text.connect('key-focus-out', () => this._entry.clutter_text.set_cursor_visible(false));
         this._dragPressSignal = this._panel.connect('button-press-event', (_panel, event) => this._beginDrag(event));
@@ -117,6 +123,7 @@ export class HistoryPopup {
         this._imageViewer.destroy();
         this._history.cancelSelectedImagePreview();
         this._entry.clutter_text.disconnect(this._keySignal);
+        this._entry.clutter_text.disconnect(this._activateSignal);
         this._entry.clutter_text.disconnect(this._focusInSignal);
         this._entry.clutter_text.disconnect(this._focusOutSignal);
         this._entry.clutter_text.disconnect(this._searchSignal);
@@ -264,20 +271,6 @@ export class HistoryPopup {
             this.close();
             return Clutter.EVENT_STOP;
         }
-        if (symbol === Clutter.KEY_Delete) {
-            const shiftPressed = (event.get_state() & Clutter.ModifierType.SHIFT_MASK) !== 0;
-            if (shiftPressed) {
-                this._history.clear();
-                this._selected = 0;
-                return Clutter.EVENT_STOP;
-            }
-            if (this._entry.get_text().length === 0) {
-                const item = this._filtered[this._selected];
-                if (item)
-                    this._history.remove(item);
-                return Clutter.EVENT_STOP;
-            }
-        }
         if (symbol === Clutter.KEY_Up || symbol === Clutter.KEY_Down) {
             if (this._filtered.length > 0) {
                 const delta = symbol === Clutter.KEY_Up ? -1 : 1;
@@ -296,17 +289,6 @@ export class HistoryPopup {
         if ((state & Clutter.ModifierType.MOD1_MASK) !== 0 && symbol >= Clutter.KEY_1 && symbol <= Clutter.KEY_9) {
             const index = symbol - Clutter.KEY_1;
             const item = this._filtered[index];
-            if (item)
-                this._choose(item, true);
-            return Clutter.EVENT_STOP;
-        }
-        if (symbol === Clutter.KEY_Return || symbol === Clutter.KEY_KP_Enter) {
-            const item = this._filtered[this._selected];
-            const shiftPressed = (state & Clutter.ModifierType.SHIFT_MASK) !== 0;
-            if (item?.type === 'image' && shiftPressed) {
-                this._saveSelectedImage(item);
-                return Clutter.EVENT_STOP;
-            }
             if (item)
                 this._choose(item, true);
             return Clutter.EVENT_STOP;
@@ -330,6 +312,26 @@ export class HistoryPopup {
             return Clutter.EVENT_STOP;
         if (event.type() === Clutter.EventType.KEY_PRESS) {
             const symbol = event.get_key_symbol();
+            if (symbol === Clutter.KEY_Delete) {
+                const shiftPressed = (event.get_state() & Clutter.ModifierType.SHIFT_MASK) !== 0;
+                if (shiftPressed) {
+                    this._history.clear();
+                    this._selected = 0;
+                    return Clutter.EVENT_STOP;
+                }
+                if (this._entry.get_text().length === 0) {
+                    const item = this._filtered[this._selected];
+                    if (item)
+                        this._history.remove(item);
+                    return Clutter.EVENT_STOP;
+                }
+            }
+            if ((symbol === Clutter.KEY_Return || symbol === Clutter.KEY_KP_Enter) &&
+                (event.get_state() & Clutter.ModifierType.SHIFT_MASK) !== 0 &&
+                this._filtered[this._selected]?.type === 'image') {
+                this._saveSelectedImage(this._filtered[this._selected]);
+                return Clutter.EVENT_STOP;
+            }
             if (symbol === Clutter.KEY_Escape) {
                 this.close();
                 return Clutter.EVENT_STOP;
@@ -562,9 +564,12 @@ export class HistoryPopup {
     }
 
     _choose(item, shouldPaste = false) {
-        if (!this._history.restore(item) || !shouldPaste || !this._previousWindow)
+        const targetWindow = this._previousWindow;
+        if (!this._history.restore(item, restored => {
+            if (restored && shouldPaste && targetWindow)
+                this._onPaste?.(targetWindow);
+        }))
             return;
-        this._onPaste?.(this._previousWindow);
     }
 }
 
